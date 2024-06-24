@@ -30,19 +30,6 @@ limit 5;
 
 select * from credit_card;
 
-with max_amount as (
-select 
-card_type,
-month(transaction_date) as mnth,
-year(transaction_date) as yr,
-max(amount) as Max_amt
-from credit_card 
-GROUP BY card_type,mnth,yr
-)
-SELECT Card_type,Mnth,Yr,Max_amt
-FROM max_amount
-WHERE max_amt IN (SELECT MAX(max_amt) FROM max_amount GROUP BY card_type);
-
 
 with cte as (
 select
@@ -70,33 +57,27 @@ sum(amount) over (partition by card_type order by transaction_date, transaction_
 from credit_card),
 cte2 as (
 select *,
-row_number() over(partition by card_type order by transaction_date, transaction_id) as rn
+dense_rank() over(partition by card_type order by tot) as rn
 from cte
 where tot >=1000000)
 select *
 from cte2
-where rn<=4;
+where rn=1;
 
 
 -- 4- write a query to find city which had lowest percentage spend for gold card type
 
-
-with cte1 as (
-select 
-card_type,
-city,
-sum(amount),
-sum(amount)/(select sum(amount) from credit_card) * 100 as per
-from credit_card
-group by card_type,city
-having card_type='gold'),
-cte2 as(
-select *,
-dense_rank() over (order by per) as rn
-from cte1)
-select * 
-from cte2
-where rn =1;
+WITH cte as(
+	SELECT city, card_type, SUM(amount) as amount,
+    SUM(CASE WHEN card_type='Gold' THEN amount END) as gold_amount
+	FROM credit_card
+	GROUP BY city, card_type
+)
+SELECT city, SUM(gold_amount)*1.0/SUM(amount) as gold_ratio
+FROM cte
+GROUP BY city
+HAVING COUNT(gold_amount) > 0 AND SUM(gold_amount)>0
+ORDER BY gold_ratio;
  
 
 
@@ -104,43 +85,39 @@ where rn =1;
 
 -- 5- write a query to print 3 columns:  city, highest_expense_type , lowest_expense_type (example format : Delhi , bills, Fuel)
 
+select * from credit_card;
 
-SELECT
-    city,
-  MAX(CASE WHEN amount = max_amount THEN exp_type END) AS highest_expense_type,
-    MIN(CASE WHEN amount = min_amount THEN exp_type END) AS lowest_expense_type
-FROM (
-    SELECT
-        city,
-        exp_type,
-        amount,
-        MAX(amount) OVER (PARTITION BY city) AS max_amount,
-        MIN(amount) OVER (PARTITION BY city) AS min_amount
-    FROM credit_card
-) sub
-GROUP BY city, max_amount, min_amount;
-
-
-/*select 
-city,
-max(case when (select max(amount) over (partition by city) from  credit_card) then exp_type end) as max_expence ,
-min(case when (select min(amount) over (partition by city) from credit_card) then exp_type end) as min_expence
+with cte as(
+select 
+city,exp_type,sum(amount) as tot_amt
 from credit_card
-group by city;*/-- wrong answer
+group by city,exp_type),
+cte1 as (
+select *,
+dense_rank() over(partition by city order by tot_amt asc) as rn_asc,
+dense_rank() over(partition by city order by tot_amt desc) as rn_dsc
+from cte)
+select 
+city,
+max(case when rn_asc=1 then exp_type END) as low_expence,
+max(case when rn_dsc=1 then exp_type END) as high_expence
+from cte1
+group by city;
+
 
 -- 6- write a query to find percentage contribution of spends by females for each expense type
 
 
-select 
-gender,
-exp_type,
-sum(amount)/(select sum(amount) from credit_card) * 100 as per
-from credit_card
-group by gender,exp_type
-having gender='f';
+
+SELECT exp_type,
+SUM(CASE WHEN gender='F' THEN amount ELSE 0 END)*1.0/SUM(amount) as percent_female_contribution
+FROM credit_card
+GROUP BY exp_type
+ORDER BY percent_female_contribution DESC;
+
+
 
 -- 7- which card and expense type combination saw highest month over month growth in Jan-2014
-
 select * from credit_card;
 with cte as (
 select 
@@ -151,57 +128,35 @@ year(transaction_date) as yr,
 sum(amount) as total
 from credit_card
 group by card_type,
-exp_type,mn,yr
-order by card_type,exp_type,mn,yr),
+exp_type,month(transaction_date),year(transaction_date)),
 cte2 as (
 select *,
-lag(total) over(partition by card_type,exp_type order by card_type,exp_type,mn,yr) as dif
+lag(total,1) over(partition by card_type,exp_type order by yr,mn) as dif
 from cte)
 select *,
-(total-dif)/dif as growth
+(total-dif) as growth
 from cte2
 where mn=1 and yr=2014
-order by growth desc;
-
-
-
-
-
-
-
-
+order by growth desc
+limit 1;
 
 -- 8- during weekends which city has highest total spend to total no of transcations ratio 
 
 
-
-
-with cte as (
-select city,
-sum(amount) as tot,
-dayname(transaction_date) as dn
+select city,sum(amount)*1.0/count(*) as ratio
 from credit_card
 where dayname(transaction_date) in ('saturday','sunday')
-group by city,dayname(transaction_date)),
-cte2 as (
-select city,
-tot/(select count(transaction_id) from credit_card) as ratio
-from cte)
-select city,
-max(ratio)
-from cte2
 group by city
-limit 1;
-
+order by ratio desc
+limit 1
+;
 
 -- 9- which city took least number of days to reach its 500th transaction after the first transaction in that city
 
 select * from credit_card;
 
 with cte as (
-select city,
-transaction_date,
-transaction_id,
+select *,
 row_number() over (partition by city order by transaction_date) as rn
 from credit_card),
 cte2 as (
@@ -228,6 +183,19 @@ from cte4
 order by days_500
 limit 1;
 
+with cte as(
+select *,
+row_number() over(partition by city order by transaction_date,transaction_id) as rn
+from credit_card)
+
+select city,max(transaction_date),min(transaction_date),
+timestampdiff(day,min(transaction_date),max(transaction_date)) as date_diff
+from cte
+where rn=1 or rn=500
+group by city
+having count(*)=2
+order by date_diff
+limit 1;
 
 
 
